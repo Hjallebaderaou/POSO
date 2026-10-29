@@ -1,7 +1,7 @@
 # POSO — heads-up No-Limit Texas Hold'em solver
 
 Incremental Rust implementation, correctness before performance. **Steps 1–5 are implemented, including the first river CFR+ solver.
-Best-response exploitability is not implemented yet. The final interface will be a clean website.**
+Best-response exploitability is not implemented. A local-only river website is included.**
 Rust provides safe compact representations and contiguous numerical arrays without
 requiring a garbage collector. This crate currently has no dependencies.
 
@@ -17,6 +17,8 @@ src/
   betting.rs      # per-street sizes, both raise formulas, strict raise caps
   ranges.rs       # 1,326-combo weights, dead cards, joint card removal
   solver.rs       # river tree compilation, CFR+, strategies and EV queries
+  bin/website_worker.rs # local website solver subprocess
+web/              # local server, interface and tests
 tests/
   evaluator.rs    # independent oracle, edge cases, exhaustive distribution
   tree.rs         # rules, transitions, payoffs, blockers, small tree enumeration
@@ -24,11 +26,93 @@ tests/
   ranges.rs       # combo bijection, weighted blockers, joint probability oracles
   solver.rs       # analytic river spot, scalar EV oracle, full-range smoke test
 examples/
-  river.rs        # executable backend milestone demo (not the final interface)
+  river.rs        # executable backend milestone demo
 ```
 
-Planned modules, added in sequence rather than empty placeholders:
-`analysis`, `interface` (web frontend).
+Planned solver work includes a separate `analysis` module for best responses.
+
+## Local website
+
+This interface runs on your computer, not on the internet. Install a stable Rust
+toolchain (1.88 or later), Cargo, and Node.js 18 or later. No npm packages or
+external service are required.
+
+```sh
+npm start
+# Open http://localhost:3000 in your browser; Ctrl+C stops the server.
+```
+
+`npm start` builds the native solver worker in release mode before serving the
+site. To change the port on macOS/Linux, run `PORT=3001 npm start`; on PowerShell,
+run `$env:PORT=3001; npm start`. The production/local launch is the same: there
+is intentionally no public deployment. To build and start separately:
+
+```sh
+cargo build --release --bin website_worker
+node web/server.js
+```
+
+The server binds **only 127.0.0.1**. It validates the Host header and requires a
+same-origin JSON POST for starting solves; it does not enable CORS. Do not proxy
+or expose it to the network: it is a local tool, not an authenticated public API.
+It serves static HTML/CSS/JavaScript and launches the real Rust solver in one
+separate subprocess, leaving the browser responsive. The subprocess owns one
+solver; a new solve replaces a completed one, while concurrent solves are
+rejected. Closing the terminal stops the server. There is no cloud service,
+account, stored job history, tracking or deployment configuration.
+
+### Using the workspace
+
+* Set five unique river cards, the initial pot, both stacks behind, the minimum
+  bet, and chips per BB. BB is a display conversion only; solver amounts are
+  integer chips. OOP acts first.
+* Choose OOP or IP and paint matrix cells with a weight between 0% and 100%.
+  Upper triangle = suited, lower triangle = offsuit, diagonal = pairs. Painting
+  sets every exact combo in that cell. Fill/Clear affect the selected range.
+  The exact-combo editor replaces a range, e.g. `AsAh:100, 4s4h:50`, and can
+  show the current weights. Board-blocked combinations remain editable but
+  are removed from the solve.
+* Enter up to three integer percentage sizes each for bets and raises, select
+  the raise basis, all-in candidate, and strict raise cap. Empty sizes are
+  permitted. Minimum illegal actions are omitted, and configured sizes can
+  still cap at all-in when the separate all-in candidate is disabled. See
+  **Step 3** below for the exact formulas and rounding conventions.
+* Choose 1–5,000 iterations, uniform or linear averaging, and a delay smaller
+  than the iteration count. Run the solve. The default/preset is the existing
+  polarized river example. Progress counts completed iterations, not estimated
+  time or convergence. On large ranges, reduce sizes or iterations if the
+  conservative workload limit rejects the spot.
+* Use action buttons and breadcrumbs to navigate actual solver node IDs;
+  terminal nodes have no strategy. Select a cell and exact combo for action
+  frequencies and EVs. The result matrix averages each action frequency using
+  the acting player's **input combo weights**, not opponent-adjusted marginals
+  or path reach weights. Board-blocked and joint-unsupported hands, hands with
+  no accumulated average policy, and hands with zero compatible opponent reach
+  are excluded. Empty cells do not mean a zero-frequency strategy. Exact hand
+  detail distinguishes blocked/unsupported, no accumulation and unreachable.
+* EVs are conditional continuation values in chips, plus a BB display conversion.
+  They include the original initial-pot/2 sunk baseline; a numeric zero is a
+  genuine zero EV, not missing data. Root EVs use the joint blocker-correct
+  distribution. Exploitability and best responses are **not implemented**;
+  iteration count alone is not a convergence guarantee. Only heads-up river
+  solving is supported: no preflop, flop, or turn solving.
+
+The Rust boundary revalidates cards, weights, settings and sizes. Limits are
+100 nodes, depth 16, 1–5,000 iterations, up to three bet and raise sizes (1–500%),
+raise cap 0–2, chip inputs 1–1,000,000, and weights 0–1. A conservative budget
+of 150 million (board-unblocked OOP combos × IP combos × nodes × iterations)
+rejects large requests before traversal; the local server also kills a solve
+after 120 seconds. Tree/action limits bound allocated solver arrays but are not
+an OS-level memory quota. There is one worker process at a time. The website
+never sends poker inputs to an external service.
+
+```sh
+cargo build --release --bin website_worker  # required before the web API tests
+cargo test
+npm test
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+```
 
 ## Run tests
 
@@ -50,8 +134,7 @@ checks every five-card hand against the oracle, the nine known category totals
 and the 7,462 distinct strengths. Royal flush is an ace-high straight flush, not
 a separate category. Suits never break ties.
 
-**Validation:** tested with Rust 1.88.0. All 43 normal tests pass, as does the
-exhaustive five-card oracle/distribution test. `cargo fmt --check` and
+**Validation:** tested with Rust 1.88.0. The normal Rust suite and the exhaustive five-card oracle/distribution test pass. `cargo fmt --check` and
 `cargo clippy --all-targets -- -D warnings` pass. README API examples are also
 compiled as crate documentation tests.
 
@@ -124,15 +207,14 @@ enumerates subsets for six/seven cards.
    Quantization must be validated for numerical/convergence error. MCCFR/GPU optional.
 9. Preflop clustering: much larger street/runout/action space; measure abstraction
    error and explain how bucket boundaries and postflop values connect.
-10. Clean website (confirmed user choice): per-hand/action strategy and EV, 13x13 aggregates,
-    tree navigation, bet sizing, exploitability and iteration count.
+10. Local website: per-hand/action strategy and EV, weighted 13x13 aggregates,
+    tree navigation, bet sizing and iteration count. Exploitability remains unimplemented.
 
 Each step gets tests and review before proceeding. No simplified poker variants.
 
 ## Known limitations / next step
 
-No best responses, exploitability metric, web frontend, benchmarks or threading
-yet. Steps 1–5 compile and pass their supplied tests.
+No best responses, exploitability metric, benchmarks or threading yet. Steps 1–5 compile and pass their supplied tests.
 No preflop betting, blinds, antes, rake, side pots, or multiway support. Amounts
 are integer units; a future display layer will configure units per BB. Showdown
 ties split expected value exactly, rather than using seat-dependent odd chips.
@@ -312,8 +394,7 @@ merging, stack capping, off-abstraction rejection, zero pots, empty size lists,
 all-in opponents, `u64` boundary amounts, and enumeration of a small abstracted
 river tree. Current limitations: one shared sizing policy per street (not yet
 per-player or depth-specific), no JSON/UI configuration parser, and no automatic
-near-all-in merging other than exact total equality. The future website can
-consume this API; no frontend has been built yet.
+near-all-in merging other than exact total equality. The local website consumes this API.
 
 
 ## Step 4 — ranges and blockers
@@ -396,8 +477,7 @@ large relative dynamic ranges are not lossless. If compatible support exists but
 the entire joint normalizer underflows, construction returns `NumericalUnderflow`
 rather than incorrectly reporting impossible hands or returning NaNs. Individual
 vanishingly small terms can still round to zero; arbitrary-precision/log-domain
-weights are not implemented. There is no text range parser (`AKs`, `QQ+` etc.) or
-13x13 website component yet; the exact-combo API is ready for those later layers.
+weights are not implemented. The website supports matrix painting and exact-combo text input, but not a shorthand range parser (`AKs`, `QQ+`, etc.).
 
 ```sh
 cargo test --test ranges
@@ -524,8 +604,7 @@ IP call         0.499821
 OOP average EV 25.000008
 ```
 
-This is a backend smoke/demo executable, **not a change from the planned clean
-website**. It reports EV snapshots, not exploitability. Analytic frequencies and
+This is the backend smoke/demo executable; the local website is a separate interface. It reports EV snapshots, not exploitability. Analytic frequencies and
 zero-sum EV are useful checks, but neither proves low exploitability in general.
 Step 6 will supply a separate best-response calculation and convergence metric.
 
@@ -536,7 +615,6 @@ terminal kernel and no performance claims. Tree caps bound node count and depth,
 not a precise byte budget. Depth must be 1–256; the root is depth 0. Each decision
 stores two `f64` arrays of `actions × 1326` elements. Large abstractions may need
 much smaller node budgets than simple examples. There is no early stopping,
-checkpoint serialization, cancellation, automatic exploitability target, or
-web UI yet. `f64` regret/EV arithmetic is approximate (chip amounts above 2^53
+checkpoint serialization, in-solver cancellation, or an automatic exploitability target. `f64` regret/EV arithmetic is approximate (chip amounts above 2^53
 lose integer precision); extremely long runs and extreme input scales can exceed
 useful numerical accuracy. Turn/flop chance traversal is still Step 7.

@@ -1,0 +1,9 @@
+{
+  "name": "poso-local-website",
+  "private": true,
+  "scripts": {
+    "start": "cargo build --release --bin website_worker && node web/server.js",
+    "test": "node --test web/*.test.js"
+  },
+  "engines": { "node": ">=18" }
+}

@@ -412,6 +412,69 @@ impl RiverSolver {
         let mut path = Vec::new();
         find(&self.nodes, 0, target, &mut path).then_some(path)
     }
+    /// Batch reports for a node, sharing continuation traversals across hands.
+    /// `None` means the hand has no compatible initial support. The boolean
+    /// indicates whether average strategy was actually accumulated for the hand.
+    pub fn node_reports(&self, id: usize) -> Result<Vec<Option<(HandReport, bool)>>, SolverError> {
+        let d = self.decision(id)?;
+        let actor = match d.state.node() {
+            Node::Player(p) => p.index(),
+            _ => unreachable!(),
+        };
+        let policy = self.policy(id, StrategyKind::Average);
+        let mut opp = self.joint.independent()[1 - actor].weights().to_vec();
+        for (ancestor, a) in self.path(id).ok_or(SolverError::InvalidNode)? {
+            let node = self.decision(ancestor)?;
+            if matches!(node.state.node(), Node::Player(p) if p.index() != actor) {
+                let p = self.policy(ancestor, StrategyKind::Average);
+                for (k, r) in opp.iter_mut().enumerate() {
+                    *r *= p[a * COMBO_COUNT + k];
+                }
+            }
+        }
+        let action_values: Vec<_> = d
+            .children
+            .iter()
+            .map(|&child| self.values(child, actor, &opp, StrategyKind::Average))
+            .collect();
+        let mut result = vec![None; COMBO_COUNT];
+        for &h in &self.active[actor] {
+            let denominator: f64 = self.active[1 - actor]
+                .iter()
+                .filter(|&&k| {
+                    let outcome = if actor == 0 {
+                        self.outcomes[h * COMBO_COUNT + k]
+                    } else {
+                        self.outcomes[k * COMBO_COUNT + h]
+                    };
+                    outcome != 2
+                })
+                .map(|&k| opp[k])
+                .sum();
+            let accumulated =
+                (0..d.actions.len()).any(|a| d.strategy_sum[a * COMBO_COUNT + h] > 0.0);
+            result[h] = Some((
+                HandReport {
+                    actions: d.actions.clone(),
+                    frequencies: (0..d.actions.len())
+                        .map(|a| policy[a * COMBO_COUNT + h])
+                        .collect(),
+                    action_evs: action_values
+                        .iter()
+                        .map(|v| {
+                            if denominator > 0.0 {
+                                Some(v[h] / denominator)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect(),
+                },
+                accumulated,
+            ));
+        }
+        Ok(result)
+    }
     pub fn hand_report(
         &self,
         id: usize,
