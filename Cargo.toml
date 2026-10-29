@@ -1,0 +1,11 @@
+[package]
+name = "poso"
+version = "0.1.0"
+edition = "2021"
+description = "Incremental heads-up No-Limit Texas Hold'em solver"
+
+[lib]
+path = "src/lib.rs"
+
+[profile.release]
+debug = true
