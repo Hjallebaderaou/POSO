@@ -345,3 +345,34 @@ fn asymmetric_raise_tree_initial_ev_matches_scalar_pair_enumeration() {
     let ev = s.expected_values(StrategyKind::Average);
     assert!((ev[0] + ev[1]).abs() < 1e-9);
 }
+
+#[test]
+fn batch_reports_match_per_hand_queries_and_track_fallback() {
+    use poso::ranges::ComboIndex;
+    let mut s = polarized();
+    let h = hole("As Ah");
+    let initial = s.node_reports(0).unwrap();
+    assert!(!initial[ComboIndex::of(h).get()].as_ref().unwrap().1);
+    assert!(initial[ComboIndex::of(hole("2c As")).get()].is_none());
+    s.solve(40).unwrap();
+    let bet = s
+        .decision(0)
+        .unwrap()
+        .actions()
+        .iter()
+        .position(|a| *a == Action::BetTo(100))
+        .unwrap();
+    let facing = s.decision(0).unwrap().children()[bet];
+    for (id, hands) in [(0, vec!["As Ah", "4s 4h"]), (facing, vec!["Ks Kh"])] {
+        let batch = s.node_reports(id).unwrap();
+        for hand in hands {
+            let h = hole(hand);
+            let (report, accumulated) = batch[ComboIndex::of(h).get()].as_ref().unwrap();
+            let scalar = s.hand_report(id, h, StrategyKind::Average).unwrap();
+            assert!(*accumulated);
+            assert_eq!(report.actions, scalar.actions);
+            assert_eq!(report.frequencies, scalar.frequencies);
+            assert_eq!(report.action_evs, scalar.action_evs);
+        }
+    }
+}
